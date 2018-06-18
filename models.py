@@ -81,7 +81,7 @@ def FCN_Vgg16_32s(input_shape=None, weight_decay=0., batch_momentum=0.9, batch_s
     #classifying layer
     x = Conv2D(classes, (1, 1), kernel_initializer='he_normal', activation='linear', padding='valid', strides=(1, 1), kernel_regularizer=l2(weight_decay))(x)
 
-    x = BilinearUpSampling2D(size=(32, 32))(x)
+    x = Conv2DTranspose(classes, (64, 64), strides=(32, 32), use_bias=False)(x)
 
     model = Model(img_input, x)
 
@@ -89,8 +89,7 @@ def FCN_Vgg16_32s(input_shape=None, weight_decay=0., batch_momentum=0.9, batch_s
     model.load_weights(weights_path, by_name=True)
     return model
 
-
-def AtrousFCN_Vgg16_16s(input_shape=None, weight_decay=0., batch_momentum=0.9, batch_shape=None, classes=21):
+def FCN_Vgg16_16s(input_shape=None, weight_decay=0., batch_momentum=0.9, batch_shape=None, classes=21):
     if batch_shape:
         img_input = Input(batch_shape=batch_shape)
         image_size = batch_shape[1:3]
@@ -117,29 +116,108 @@ def AtrousFCN_Vgg16_16s(input_shape=None, weight_decay=0., batch_momentum=0.9, b
     x = Conv2D(512, (3, 3), activation='relu', padding='same', name='block4_conv1', kernel_regularizer=l2(weight_decay))(x)
     x = Conv2D(512, (3, 3), activation='relu', padding='same', name='block4_conv2', kernel_regularizer=l2(weight_decay))(x)
     x = Conv2D(512, (3, 3), activation='relu', padding='same', name='block4_conv3', kernel_regularizer=l2(weight_decay))(x)
-    x = MaxPooling2D((2, 2), strides=(2, 2), name='block4_pool')(x)
+    pool4 = MaxPooling2D((2, 2), strides=(2, 2), name='block4_pool')(x)
 
     # Block 5
-    x = Conv2D(512, (3, 3), activation='relu', padding='same', name='block5_conv1', kernel_regularizer=l2(weight_decay))(x)
+    x = Conv2D(512, (3, 3), activation='relu', padding='same', name='block5_conv1', kernel_regularizer=l2(weight_decay))(pool4)
     x = Conv2D(512, (3, 3), activation='relu', padding='same', name='block5_conv2', kernel_regularizer=l2(weight_decay))(x)
     x = Conv2D(512, (3, 3), activation='relu', padding='same', name='block5_conv3', kernel_regularizer=l2(weight_decay))(x)
+    x = MaxPooling2D((2, 2), strides=(2, 2), name='block5_pool')(x)
 
     # Convolutional layers transfered from fully-connected layers
-    x = Conv2D(4096, (7, 7), activation='relu', padding='same', dilation_rate=(2, 2),
-                      name='fc1', kernel_regularizer=l2(weight_decay))(x)
+    x = Conv2D(4096, (7, 7), activation='relu', padding='same', name='fc1', kernel_regularizer=l2(weight_decay))(x)
     x = Dropout(0.5)(x)
     x = Conv2D(4096, (1, 1), activation='relu', padding='same', name='fc2', kernel_regularizer=l2(weight_decay))(x)
     x = Dropout(0.5)(x)
     #classifying layer
     x = Conv2D(classes, (1, 1), kernel_initializer='he_normal', activation='linear', padding='valid', strides=(1, 1), kernel_regularizer=l2(weight_decay))(x)
 
-    x = BilinearUpSampling2D(target_size=tuple(image_size))(x)
+    # First deconvolution on layer 7
+    upscore2 = Conv2DTranspose(classes, (4, 4), strides=(2, 2), name='block_1_up_conv1', use_bias=False)(x)
 
-    model = Model(img_input, x)
+    # Second deconvolution on layer 4
+    score_pool4 = Conv2D(classes, (1, 1), activation='linear', padding='same', name='block_2_up_conv_1')(pool4)
+    # Crop - check crop operation
+
+    # Fusion layer - Add the upscore and core_pool4 layers
+    fuse_pool4 = Add() ([upscore2, score_pool4])
+
+    # Last deconvolution layer 
+    upscore16 = Conv2DTranspose(classes, (32, 32), strides=(16, 16), use_bias=False)(fuse_pool4)
+
+    model = Model(img_input, upscore16)
 
     weights_path = os.path.expanduser(os.path.join('~', '.keras/models/fcn_vgg16_weights_tf_dim_ordering_tf_kernels.h5'))
     model.load_weights(weights_path, by_name=True)
     return model
+
+
+def FCN_Vgg16_8s(input_shape=None, weight_decay=0., batch_momentum=0.9, batch_shape=None, classes=21):
+    if batch_shape:
+        img_input = Input(batch_shape=batch_shape)
+        image_size = batch_shape[1:3]
+    else:
+        img_input = Input(shape=input_shape)
+        image_size = input_shape[0:2]
+    # Block 1
+    x = Conv2D(64, (3, 3), activation='relu', padding='same', name='block1_conv1', kernel_regularizer=l2(weight_decay))(img_input)
+    x = Conv2D(64, (3, 3), activation='relu', padding='same', name='block1_conv2', kernel_regularizer=l2(weight_decay))(x)
+    x = MaxPooling2D((2, 2), strides=(2, 2), name='block1_pool')(x)
+
+    # Block 2
+    x = Conv2D(128, (3, 3), activation='relu', padding='same', name='block2_conv1', kernel_regularizer=l2(weight_decay))(x)
+    x = Conv2D(128, (3, 3), activation='relu', padding='same', name='block2_conv2', kernel_regularizer=l2(weight_decay))(x)
+    x = MaxPooling2D((2, 2), strides=(2, 2), name='block2_pool')(x)
+
+    # Block 3
+    x = Conv2D(256, (3, 3), activation='relu', padding='same', name='block3_conv1', kernel_regularizer=l2(weight_decay))(x)
+    x = Conv2D(256, (3, 3), activation='relu', padding='same', name='block3_conv2', kernel_regularizer=l2(weight_decay))(x)
+    x = Conv2D(256, (3, 3), activation='relu', padding='same', name='block3_conv3', kernel_regularizer=l2(weight_decay))(x)
+    pool3 = MaxPooling2D((2, 2), strides=(2, 2), name='block3_pool')(x)
+
+    # Block 4
+    x = Conv2D(512, (3, 3), activation='relu', padding='same', name='block4_conv1', kernel_regularizer=l2(weight_decay))(pool3)
+    x = Conv2D(512, (3, 3), activation='relu', padding='same', name='block4_conv2', kernel_regularizer=l2(weight_decay))(x)
+    x = Conv2D(512, (3, 3), activation='relu', padding='same', name='block4_conv3', kernel_regularizer=l2(weight_decay))(x)
+    pool4 = MaxPooling2D((2, 2), strides=(2, 2), name='block4_pool')(x)
+
+    # Block 5
+    x = Conv2D(512, (3, 3), activation='relu', padding='same', name='block5_conv1', kernel_regularizer=l2(weight_decay))(pool4)
+    x = Conv2D(512, (3, 3), activation='relu', padding='same', name='block5_conv2', kernel_regularizer=l2(weight_decay))(x)
+    x = Conv2D(512, (3, 3), activation='relu', padding='same', name='block5_conv3', kernel_regularizer=l2(weight_decay))(x)
+    x = MaxPooling2D((2, 2), strides=(2, 2), name='block5_pool')(x)
+
+    # Convolutional layers transfered from fully-connected layers
+    x = Conv2D(4096, (7, 7), activation='relu', padding='same', name='fc1', kernel_regularizer=l2(weight_decay))(x)
+    x = Dropout(0.5)(x)
+    x = Conv2D(4096, (1, 1), activation='relu', padding='same', name='fc2', kernel_regularizer=l2(weight_decay))(x)
+    x = Dropout(0.5)(x)
+    #classifying layer
+    x = Conv2D(classes, (1, 1), kernel_initializer='he_normal', activation='linear', padding='valid', strides=(1, 1), kernel_regularizer=l2(weight_decay))(x)
+
+    # First deconvolution on layer 7
+    upscore2 = Conv2DTranspose(classes, (4, 4), strides=(2, 2), name='block_1_upconv1', use_bias=False)(x)
+
+    # Second deconvolution on layer 4
+    score_pool4 = Conv2D(classes, (1, 1), activation='linear', padding='same', name='block_2_upconv1')(pool4)
+    # Crop - check crop operation
+    fuse_pool4 = Add(name='block_2_upconv2') ([upscore2, score_pool4]) # Fusion layer - Add the upscore and score_pool4 layers
+    upscore4 = Conv2DTranspose(classes, (4, 4), strides=(2, 2), use_bias=False)(fuse_pool4)
+
+    # Second deconvolution on layer 3
+    score_pool3 = Conv2D(classes, (1, 1), activation='linear', padding='same', name='block_3_upconv1')(pool3)
+    # Crop - check crop operation
+    fuse_pool3 = Add(name='block_3_upconv2') ([upscore4, score_pool3]) # Fusion layer - Add the upscore4 and score_pool3 layers
+
+    # Final deconvolutional layer
+    upscore8 = Conv2DTranspose(classes, (16, 16), strides=(8, 8), use_bias=False)(fuse_pool3)
+
+    model = Model(img_input, upscore8)
+
+    weights_path = os.path.expanduser(os.path.join('~', '.keras/models/fcn_vgg16_weights_tf_dim_ordering_tf_kernels.h5'))
+    model.load_weights(weights_path, by_name=True)
+    return model
+
 
 
 def FCN_Resnet50_32s(input_shape = None, weight_decay=0., batch_momentum=0.9, batch_shape=None, classes=21):
@@ -187,141 +265,7 @@ def FCN_Resnet50_32s(input_shape = None, weight_decay=0., batch_momentum=0.9, ba
     return model
 
 
-def AtrousFCN_Resnet50_16s(input_shape = None, weight_decay=0., batch_momentum=0.9, batch_shape=None, classes=21):
-    if batch_shape:
-        img_input = Input(batch_shape=batch_shape)
-        image_size = batch_shape[1:3]
-    else:
-        img_input = Input(shape=input_shape)
-        image_size = input_shape[0:2]
-
-    bn_axis = 3
-
-    x = Conv2D(64, (7, 7), strides=(2, 2), padding='same', name='conv1', kernel_regularizer=l2(weight_decay))(img_input)
-    x = BatchNormalization(axis=bn_axis, name='bn_conv1', momentum=batch_momentum)(x)
-    x = Activation('relu')(x)
-    x = MaxPooling2D((3, 3), strides=(2, 2))(x)
-
-    x = conv_block(3, [64, 64, 256], stage=2, block='a', weight_decay=weight_decay, strides=(1, 1), batch_momentum=batch_momentum)(x)
-    x = identity_block(3, [64, 64, 256], stage=2, block='b', weight_decay=weight_decay, batch_momentum=batch_momentum)(x)
-    x = identity_block(3, [64, 64, 256], stage=2, block='c', weight_decay=weight_decay, batch_momentum=batch_momentum)(x)
-
-    x = conv_block(3, [128, 128, 512], stage=3, block='a', weight_decay=weight_decay, batch_momentum=batch_momentum)(x)
-    x = identity_block(3, [128, 128, 512], stage=3, block='b', weight_decay=weight_decay, batch_momentum=batch_momentum)(x)
-    x = identity_block(3, [128, 128, 512], stage=3, block='c', weight_decay=weight_decay, batch_momentum=batch_momentum)(x)
-    x = identity_block(3, [128, 128, 512], stage=3, block='d', weight_decay=weight_decay, batch_momentum=batch_momentum)(x)
-
-    x = conv_block(3, [256, 256, 1024], stage=4, block='a', weight_decay=weight_decay, batch_momentum=batch_momentum)(x)
-    x = identity_block(3, [256, 256, 1024], stage=4, block='b', weight_decay=weight_decay, batch_momentum=batch_momentum)(x)
-    x = identity_block(3, [256, 256, 1024], stage=4, block='c', weight_decay=weight_decay, batch_momentum=batch_momentum)(x)
-    x = identity_block(3, [256, 256, 1024], stage=4, block='d', weight_decay=weight_decay, batch_momentum=batch_momentum)(x)
-    x = identity_block(3, [256, 256, 1024], stage=4, block='e', weight_decay=weight_decay, batch_momentum=batch_momentum)(x)
-    x = identity_block(3, [256, 256, 1024], stage=4, block='f', weight_decay=weight_decay, batch_momentum=batch_momentum)(x)
-
-    x = atrous_conv_block(3, [512, 512, 2048], stage=5, block='a', weight_decay=weight_decay, atrous_rate=(2, 2), batch_momentum=batch_momentum)(x)
-    x = atrous_identity_block(3, [512, 512, 2048], stage=5, block='b', weight_decay=weight_decay, atrous_rate=(2, 2), batch_momentum=batch_momentum)(x)
-    x = atrous_identity_block(3, [512, 512, 2048], stage=5, block='c', weight_decay=weight_decay, atrous_rate=(2, 2), batch_momentum=batch_momentum)(x)
-    #classifying layer
-    #x = Conv2D(classes, (3, 3), dilation_rate=(2, 2), kernel_initializer='normal', activation='linear', padding='same', strides=(1, 1), kernel_regularizer=l2(weight_decay))(x)
-    x = Conv2D(classes, (1, 1), kernel_initializer='he_normal', activation='linear', padding='same', strides=(1, 1), kernel_regularizer=l2(weight_decay))(x)
-    x = BilinearUpSampling2D(target_size=tuple(image_size))(x)
-
-    model = Model(img_input, x)
-    weights_path = os.path.expanduser(os.path.join('~', '.keras/models/fcn_resnet50_weights_tf_dim_ordering_tf_kernels.h5'))
-    model.load_weights(weights_path, by_name=True)
-    return model
 
 
-def Atrous_DenseNet(input_shape=None, weight_decay=1E-4,
-                    batch_momentum=0.9, batch_shape=None, classes=21,
-                    include_top=False, activation='sigmoid'):
-    # TODO(ahundt) pass the parameters but use defaults for now
-    if include_top is True:
-        # TODO(ahundt) Softmax is pre-applied, so need different train, inference, evaluate.
-        # TODO(ahundt) for multi-label try per class sigmoid top as follows:
-        # x = Reshape((row * col * classes))(x)
-        # x = Activation('sigmoid')(x)
-        # x = Reshape((row, col, classes))(x)
-        return densenet.DenseNet(depth=None, nb_dense_block=3, growth_rate=32,
-                                 nb_filter=-1, nb_layers_per_block=[6, 12, 24, 16],
-                                 bottleneck=True, reduction=0.5, dropout_rate=0.2,
-                                 weight_decay=1E-4,
-                                 include_top=True, top='segmentation',
-                                 weights=None, input_tensor=None,
-                                 input_shape=input_shape,
-                                 classes=classes, transition_dilation_rate=2,
-                                 transition_kernel_size=(1, 1),
-                                 transition_pooling=None)
-
-    # if batch_shape:
-    #     img_input = Input(batch_shape=batch_shape)
-    #     image_size = batch_shape[1:3]
-    # else:
-    #     img_input = Input(shape=input_shape)
-    #     image_size = input_shape[0:2]
-
-    input_shape = _obtain_input_shape(input_shape,
-                                      default_size=32,
-                                      min_size=16,
-                                      data_format=K.image_data_format(),
-                                      include_top=False)
-    img_input = Input(shape=input_shape)
-
-    x = densenet.__create_dense_net(classes, img_input,
-                                    depth=None, nb_dense_block=3, growth_rate=32,
-                                    nb_filter=-1, nb_layers_per_block=[6, 12, 24, 16],
-                                    bottleneck=True, reduction=0.5, dropout_rate=0.2,
-                                    weight_decay=1E-4, top='segmentation',
-                                    input_shape=input_shape,
-                                    transition_dilation_rate=2,
-                                    transition_kernel_size=(1, 1),
-                                    transition_pooling=None,
-                                    include_top=include_top)
-
-    x = top(x, input_shape, classes, activation, weight_decay)
-
-    model = Model(img_input, x, name='Atrous_DenseNet')
-    # TODO(ahundt) add weight loading
-    return model
 
 
-def DenseNet_FCN(input_shape=None, weight_decay=1E-4,
-                 batch_momentum=0.9, batch_shape=None, classes=21,
-                 include_top=False, activation='sigmoid'):
-    if include_top is True:
-        # TODO(ahundt) Softmax is pre-applied, so need different train, inference, evaluate.
-        # TODO(ahundt) for multi-label try per class sigmoid top as follows:
-        # x = Reshape((row * col * classes))(x)
-        # x = Activation('sigmoid')(x)
-        # x = Reshape((row, col, classes))(x)
-        return densenet.DenseNetFCN(input_shape=input_shape,
-                                    weights=None, classes=classes,
-                                    nb_layers_per_block=[4, 5, 7, 10, 12, 15],
-                                    growth_rate=16,
-                                    dropout_rate=0.2)
-
-    # if batch_shape:
-    #     img_input = Input(batch_shape=batch_shape)
-    #     image_size = batch_shape[1:3]
-    # else:
-    #     img_input = Input(shape=input_shape)
-    #     image_size = input_shape[0:2]
-
-    input_shape = _obtain_input_shape(input_shape,
-                                      default_size=32,
-                                      min_size=16,
-                                      data_format=K.image_data_format(),
-                                      include_top=False)
-    img_input = Input(shape=input_shape)
-
-    x = densenet.__create_fcn_dense_net(classes, img_input,
-                                        input_shape=input_shape,
-                                        nb_layers_per_block=[4, 5, 7, 10, 12, 15],
-                                        growth_rate=16,
-                                        dropout_rate=0.2,
-                                        include_top=include_top)
-
-    x = top(x, input_shape, classes, activation, weight_decay)
-    # TODO(ahundt) add weight loading
-    model = Model(img_input, x, name='DenseNet_FCN')
-    return model
